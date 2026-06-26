@@ -37,6 +37,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cargo network retry config
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'EOF'
+          [net]
+          retry = 3
+          git-fetch-with-cli = true
+          EOF
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:

@@ -7,9 +7,11 @@ A cross-platform SVG editor built with Rust and [egui](https://github.com/emilk/
 - **SVG Loading & Editing** — Open SVG files, view and edit paths, fill colors, stroke colors and widths
 - **Path Editing** — Drag control points (endpoints and bezier handles) to reshape paths
 - **Drawing Tool** — Click to add points and create new paths, with close-path support
+- **Text to Path** — Input text with font selection, bold/italic, auto-convert to editable paths
 - **Path Source Editor** — Directly edit SVG path `d` attribute in a text editor
 - **Transform** — Per-path translate, scale (with aspect-ratio lock), rotate with configurable pivot
-- **Canvas Properties** — Adjustable width, height, and background color
+- **Multi-Select** — Ctrl+click to select multiple paths, drag or arrow keys to move together
+- **Canvas Properties** — Adjustable width, height, and background color (hex input)
 - **Export** — Save as SVG, PNG, or JPG
 - **Transparent Background** — Photoshop-style checkerboard pattern for transparent areas
 - **DPI Scaling** — Auto-detects screen resolution; manual +/- adjustment (0.5 step)
@@ -24,11 +26,32 @@ A cross-platform SVG editor built with Rust and [egui](https://github.com/emilk/
 
 Download the latest release for your platform from the [Releases](../../releases) page.
 
-| Platform | File |
-|----------|------|
-| Windows  | `svg-editor-windows-amd64.exe` |
-| Linux    | `svg-editor-linux-amd64` |
-| macOS (ARM) | `svg-editor-macos-arm64` |
+| Platform | File | Format |
+|----------|------|--------|
+| Windows  | `svg-editor-windows-amd64.zip` | Portable exe |
+| Linux    | `svg-editor-linux-amd64.tar.gz` | Portable binary |
+| Linux    | `svg-editor-amd64.deb` | Debian/Ubuntu package |
+| Linux    | `svg-editor-amd64.rpm` | Fedora/RHEL package |
+| macOS (ARM) | `svg-editor-macos-arm64.tar.gz` | Portable binary |
+
+### Linux Installation
+
+**Debian/Ubuntu (.deb):**
+```bash
+sudo dpkg -i svg-editor-amd64.deb
+```
+
+**Fedora/RHEL (.rpm):**
+```bash
+sudo rpm -i svg-editor-amd64.rpm
+```
+
+**Portable (tar.gz):**
+```bash
+tar xzf svg-editor-linux-amd64.tar.gz
+chmod +x svg-editor-linux-amd64
+./svg-editor-linux-amd64
+```
 
 ## Build from Source
 
@@ -49,8 +72,8 @@ sudo dnf install wayland-devel libxkbcommon-devel gtk3-devel openssl-devel fontc
 ### Build
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/svg-editor.git
-cd svg-editor
+git clone https://github.com/lx19990999/SvgEditor.git
+cd SvgEditor
 
 # Linux (requires wayland/x11 features)
 cargo build --release --features "eframe/wayland,eframe/x11"
@@ -59,7 +82,7 @@ cargo build --release --features "eframe/wayland,eframe/x11"
 cargo build --release
 ```
 
-The binary will be at `target/release/svg-editor` (or `svg-editor.exe` on Windows).
+The binary will be at `target/release/svg_editor` (or `svg_editor.exe` on Windows).
 
 ### Run
 
@@ -75,11 +98,13 @@ cargo run --release
 
 1. **Open a file** — File → Open, or drag & drop an SVG file onto the window
 2. **Select a path** — Click on a path in the canvas or in the left panel path list
-3. **Edit properties** — Use the right panel to change fill/stroke colors, stroke width
-4. **Edit path source** — Expand "Path Source" in the right panel to edit the SVG `d` attribute directly
-5. **Transform** — Expand "Transform" to adjust position, scale, rotation per path
-6. **Draw new paths** — Click the ✏ Draw button, click points on canvas, double-click or Enter to finish
-7. **Export** — File → Export as PNG / Export as JPG
+3. **Multi-select** — Ctrl+click to toggle selection, drag to move all selected paths
+4. **Edit properties** — Use the right panel to change fill/stroke colors (hex input), stroke width
+5. **Edit path source** — Expand "Path Source" in the right panel to edit the SVG `d` attribute directly
+6. **Transform** — Expand "Transform" to adjust position, scale, rotation per path
+7. **Draw new paths** — Click the ✏ Draw button, click points on canvas, double-click or Enter to finish
+8. **Add text** — Click the T Text button, click canvas to set position, select font/style/size, Enter to convert to paths
+9. **Export** — File → Export as PNG / Export as JPG
 
 ### Keyboard Shortcuts
 
@@ -87,11 +112,14 @@ cargo run --release
 |----------|--------|
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
+| `Ctrl+click` | Multi-select toggle |
+| `↑↓←→` | Move selected paths (1px) |
+| `Shift+↑↓←→` | Move selected paths (10px) |
 | `Scroll wheel` | Zoom in/out (over canvas) |
 | `Middle mouse drag` | Pan canvas |
 | `Space + drag` | Pan canvas |
-| `Enter` | Finish drawing path |
-| `Escape` | Cancel drawing |
+| `Enter` | Finish drawing / Confirm text |
+| `Escape` | Cancel drawing / Cancel text |
 
 ## Configuration
 
@@ -112,15 +140,15 @@ Configuration is stored at:
 
 ```
 src/
-├── main.rs          # Entry point, window setup, font loading
+├── main.rs          # Entry point, window setup, font loading, app icon
 ├── app.rs           # Main app state, UI layout, toolbar, menus
-├── canvas.rs        # Canvas rendering, zoom/pan, drawing tool
+├── canvas.rs        # Canvas rendering, zoom/pan, drawing tool, text tool
 ├── config.rs        # App config (DPI, language, theme), persistence
 ├── history.rs       # Undo/redo history
 ├── i18n.rs          # Translations (en, zh-CN)
-├── panels.rs        # Side panels (path list, properties)
+├── panels.rs        # Side panels (path list, properties, color editing)
 ├── path_editor.rs   # Control point dragging, hit testing
-└── svg_doc.rs       # SVG document model, parsing, export
+└── svg_doc.rs       # SVG document model, parsing, export, text-to-path
 ```
 
 ## Bundled Font
