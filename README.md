@@ -51,6 +51,11 @@ sudo dnf install wayland-devel libxkbcommon-devel gtk3-devel openssl-devel
 ```bash
 git clone https://github.com/YOUR_USERNAME/svg-editor.git
 cd svg-editor
+
+# Linux (requires wayland/x11 features)
+cargo build --release --features "eframe/wayland,eframe/x11"
+
+# Windows / macOS
 cargo build --release
 ```
 
@@ -59,6 +64,10 @@ The binary will be at `target/release/svg-editor` (or `svg-editor.exe` on Window
 ### Run
 
 ```bash
+# Linux
+cargo run --release --features "eframe/wayland,eframe/x11"
+
+# Windows / macOS
 cargo run --release
 ```
 
