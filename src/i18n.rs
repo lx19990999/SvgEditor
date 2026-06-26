@@ -88,6 +88,7 @@ static TRANSLATIONS: LazyLock<HashMap<&'static str, Trans>> = LazyLock::new(|| {
         m.insert("props.text_content", tr("Text:", "文字:"));
         m.insert("props.text_size", tr("Size:", "字号:"));
         m.insert("props.text_font", tr("Font:", "字体:"));
+        m.insert("props.text_style", tr("Style:", "样式:"));
         m.insert("props.text_font_count", tr("fonts available", "个可用字体"));
         m.insert("toolbar.dpi", tr("DPI", "DPI"));
         m.insert("toolbar.language", tr("Language", "语言"));

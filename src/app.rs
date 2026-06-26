@@ -191,9 +191,12 @@ impl SvgEditorApp {
     }
 
     fn handle_drag(&mut self, ui: &egui::Ui) {
-        let is_dragging = self.canvas_state.dragging.is_some();
+        let has_cp_drag = self.canvas_state.dragging.is_some();
+        let has_multi_select = self.canvas_state.selected_paths.len() > 1;
+        let pointer_down = ui.input(|i| i.pointer.primary_down());
+        let is_dragging = has_cp_drag || (has_multi_select && pointer_down);
 
-        // Save history when drag starts (before any modifications)
+        // Save history when drag starts
         if is_dragging && !self.was_dragging {
             self.save_history();
         }
@@ -205,7 +208,27 @@ impl SvgEditorApp {
             if let Some(ref mut doc) = self.doc {
                 if delta.length_sq() > 0.0 {
                     let canvas_rect = ui.max_rect();
-                    path_editor::apply_drag(doc, &self.canvas_state, canvas_rect, delta);
+
+                    if has_cp_drag {
+                        // Dragging a specific control point
+                        path_editor::apply_drag(doc, &self.canvas_state, canvas_rect, delta);
+                    } else if has_multi_select {
+                        // Multi-select drag: translate all selected paths
+                        let zoom_factor = {
+                            let svg_size = egui::vec2(doc.width, doc.height);
+                            let fit_scale = (canvas_rect.width() / svg_size.x)
+                                .min(canvas_rect.height() / svg_size.y)
+                                * 0.9;
+                            fit_scale * self.canvas_state.zoom
+                        };
+                        let svg_delta = egui::vec2(delta.x / zoom_factor, delta.y / zoom_factor);
+                        for &idx in &self.canvas_state.selected_paths {
+                            if let Some(path) = doc.paths.get_mut(idx) {
+                                path.translate_x += svg_delta.x;
+                                path.translate_y += svg_delta.y;
+                            }
+                        }
+                    }
                     self.texture = None;
                 }
             }
@@ -251,6 +274,41 @@ impl eframe::App for SvgEditorApp {
         }
         if redo_pressed {
             self.redo();
+        }
+
+        // Arrow keys to move selected paths
+        if !self.canvas_state.selected_paths.is_empty() && self.doc.is_some() {
+            let step = if ui.input(|i| i.modifiers.shift) { 10.0 } else { 1.0 };
+            let mut moved = false;
+            let mut dx = 0.0f32;
+            let mut dy = 0.0f32;
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
+                dx -= step;
+                moved = true;
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)) {
+                dx += step;
+                moved = true;
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+                dy -= step;
+                moved = true;
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                dy += step;
+                moved = true;
+            }
+            if moved {
+                self.save_history();
+                let doc = self.doc.as_mut().unwrap();
+                for &idx in &self.canvas_state.selected_paths {
+                    if let Some(path) = doc.paths.get_mut(idx) {
+                        path.translate_x += dx;
+                        path.translate_y += dy;
+                    }
+                }
+                self.texture = None;
+            }
         }
 
         // Handle drag operations
@@ -547,7 +605,8 @@ impl eframe::App for SvgEditorApp {
                         pivot_x: 0.5,
                         pivot_y: 0.5,
                     });
-                    self.canvas_state.selected_path = Some(doc.paths.len() - 1);
+                    self.canvas_state.selected_paths.clear();
+                    self.canvas_state.selected_paths.push(doc.paths.len() - 1);
                     self.texture = None;
                     self.status_msg = format!("{}: {}",
                         i18n::t("status.new_path", &self.lang),
@@ -557,15 +616,16 @@ impl eframe::App for SvgEditorApp {
 
             // Consume finalized text and convert to paths
             let finalized_text = self.canvas_state.finalized_text.take();
-            if let Some((text, pos, font_size, font_family)) = finalized_text {
+            if let Some((text, pos, font_size, font_family, bold, italic)) = finalized_text {
                 if !text.is_empty() && self.doc.is_some() {
-                    let new_paths = crate::svg_doc::text_to_paths(&text, pos.x, pos.y, font_size, &font_family);
+                    let new_paths = crate::svg_doc::text_to_paths(&text, pos.x, pos.y, font_size, &font_family, bold, italic);
                     if !new_paths.is_empty() {
                         self.save_history();
                         let doc = self.doc.as_mut().unwrap();
                         let count = new_paths.len();
                         doc.paths.extend(new_paths);
-                        self.canvas_state.selected_path = Some(doc.paths.len() - 1);
+                        self.canvas_state.selected_paths.clear();
+                        self.canvas_state.selected_paths.push(doc.paths.len() - 1);
                         self.texture = None;
                         self.status_msg = format!("{}: {} ({} {})",
                             i18n::t("status.new_path", &self.lang),
@@ -595,7 +655,7 @@ impl eframe::App for SvgEditorApp {
                                     if !self.canvas_state.text_input.is_empty() {
                                         let text = std::mem::take(&mut self.canvas_state.text_input);
                                         self.canvas_state.finalized_text =
-                                            Some((text, pos, self.canvas_state.text_font_size, self.canvas_state.text_font_family.clone()));
+                                            Some((text, pos, self.canvas_state.text_font_size, self.canvas_state.text_font_family.clone(), self.canvas_state.text_bold, self.canvas_state.text_italic));
                                         self.canvas_state.text_mode = false;
                                         self.canvas_state.text_position = None;
                                     }
@@ -635,6 +695,18 @@ impl eframe::App for SvgEditorApp {
                                     });
                                 });
                         });
+                        // Bold / Italic toggles
+                        ui.horizontal(|ui| {
+                            ui.label(i18n::t("props.text_style", &self.lang));
+                            let bold_btn = egui::Button::new("B").selected(self.canvas_state.text_bold);
+                            if ui.add(bold_btn).clicked() {
+                                self.canvas_state.text_bold = !self.canvas_state.text_bold;
+                            }
+                            let italic_btn = egui::Button::new("I").selected(self.canvas_state.text_italic);
+                            if ui.add(italic_btn).clicked() {
+                                self.canvas_state.text_italic = !self.canvas_state.text_italic;
+                            }
+                        });
                         if ui.button(i18n::t("menu.quit", &self.lang)).clicked() {
                             self.canvas_state.text_mode = false;
                             self.canvas_state.text_position = None;
@@ -644,7 +716,7 @@ impl eframe::App for SvgEditorApp {
             }
 
             if let Some(ref doc) = self.doc {
-                let old_selected = self.canvas_state.selected_path;
+                let old_selected = self.canvas_state.selected_paths.clone();
 
                 canvas::show_canvas(ui, doc, &mut self.canvas_state, &mut self.texture);
 
@@ -656,21 +728,36 @@ impl eframe::App for SvgEditorApp {
                         if let Some(clicked_idx) =
                             path_editor::hit_test(doc, &self.canvas_state, canvas_rect, click_pos, tolerance)
                         {
-                            self.canvas_state.selected_path = Some(clicked_idx);
+                            if ui.input(|i| i.modifiers.ctrl) {
+                                // Ctrl+click: toggle in multi-selection
+                                if let Some(pos) = self.canvas_state.selected_paths.iter().position(|&x| x == clicked_idx) {
+                                    self.canvas_state.selected_paths.remove(pos);
+                                } else {
+                                    self.canvas_state.selected_paths.push(clicked_idx);
+                                }
+                            } else {
+                                self.canvas_state.selected_paths.clear();
+                                self.canvas_state.selected_paths.push(clicked_idx);
+                            }
                         }
                     }
                 }
 
                 // Status update on selection change
-                if self.canvas_state.selected_path != old_selected {
-                    if let Some(idx) = self.canvas_state.selected_path {
+                if self.canvas_state.selected_paths != old_selected {
+                    if let Some(&idx) = self.canvas_state.selected_paths.last() {
                         if let Some(path) = doc.paths.get(idx) {
                             let name = if path.id.is_empty() {
                                 format!("{} {}", i18n::t("paths.path_n", &self.lang), idx + 1)
                             } else {
                                 path.id.clone()
                             };
-                            self.status_msg = format!("{}: {}", i18n::t("status.selected", &self.lang), name);
+                            let count = self.canvas_state.selected_paths.len();
+                            if count > 1 {
+                                self.status_msg = format!("{}: {} (+{})", i18n::t("status.selected", &self.lang), name, count - 1);
+                            } else {
+                                self.status_msg = format!("{}: {}", i18n::t("status.selected", &self.lang), name);
+                            }
                         }
                     }
                 }

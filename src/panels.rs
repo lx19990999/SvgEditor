@@ -11,7 +11,7 @@ pub fn show_path_list(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSta
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for i in 0..doc.paths.len() {
-            let is_selected = state.selected_path == Some(i);
+            let is_selected = state.selected_paths.contains(&i);
 
             let (fill_preview, stroke_preview, label_text) = {
                 let path = &doc.paths[i];
@@ -80,7 +80,16 @@ pub fn show_path_list(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSta
             );
 
             if click_response.clicked() {
-                state.selected_path = if is_selected { None } else { Some(i) };
+                if ui.input(|i| i.modifiers.ctrl) {
+                    if is_selected {
+                        state.selected_paths.retain(|&x| x != i);
+                    } else {
+                        state.selected_paths.push(i);
+                    }
+                } else {
+                    state.selected_paths.clear();
+                    state.selected_paths.push(i);
+                }
             }
         }
     });
@@ -112,9 +121,7 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
 
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", t("props.background", lang)));
-                if color_picker_button(ui, &mut doc.bg_color) {
-                    changed = true;
-                }
+                changed |= hex_color_input(ui, &mut doc.bg_color, "bg_hex", 0);
                 if ui.small_button("✖").on_hover_text(t("props.clear_bg", lang)).clicked() {
                     doc.bg_color = Color32::TRANSPARENT;
                     changed = true;
@@ -125,7 +132,7 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
         ui.separator();
 
         // Selected path section
-        if let Some(idx) = state.selected_path {
+        if let Some(&idx) = state.selected_paths.last() {
             if idx < doc.paths.len() {
                 let path_name = {
                     let path = &doc.paths[idx];
@@ -154,9 +161,7 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
                             changed = true;
                         }
                         if let Some(ref mut fill) = path.fill_color {
-                            if color_picker_button(ui, fill) {
-                                changed = true;
-                            }
+                            changed |= hex_color_input(ui, fill, "fill_hex", idx);
                         }
                     });
 
@@ -176,9 +181,7 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
                             changed = true;
                         }
                         if let Some(ref mut stroke) = path.stroke_color {
-                            if color_picker_button(ui, stroke) {
-                                changed = true;
-                            }
+                            changed |= hex_color_input(ui, stroke, "stroke_hex", idx);
                         }
                     });
 
@@ -297,7 +300,7 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
 
                 if delete_requested {
                     doc.paths.remove(idx);
-                    state.selected_path = None;
+                    state.selected_paths.clear();
                     changed = true;
                 }
             }
@@ -328,27 +331,59 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
     changed
 }
 
-/// Show a color picker button with a preview. Returns `true` if color changed.
-fn color_picker_button(ui: &mut egui::Ui, color: &mut Color32) -> bool {
+/// Hex color input with color picker and swatch preview.
+/// Uses widget memory to preserve user edits across frames.
+/// Returns true if color was changed.
+fn hex_color_input(ui: &mut egui::Ui, color: &mut Color32, tag: &str, idx: usize) -> bool {
     let mut changed = false;
 
-    // Color preview button
-    if egui::color_picker::color_edit_button_srgba(
-        ui,
-        color,
-        egui::color_picker::Alpha::Opaque,
-    )
-    .changed()
-    {
+    // Color picker button (click to open full color picker)
+    if egui::color_picker::color_edit_button_srgba(ui, color, egui::color_picker::Alpha::Opaque).changed() {
         changed = true;
     }
 
-    // Hex input field
-    let mut hex = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
-    let te = egui::TextEdit::singleline(&mut hex)
-        .desired_width(72.0)
-        .font(egui::TextStyle::Monospace);
-    if ui.add(te).changed() {
+    let id = ui.make_persistent_id((tag, idx));
+    let color_hex = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
+
+    // Track the last known color to detect external changes (from color picker)
+    let last_color_id = ui.make_persistent_id((tag, "last_color", idx));
+    let last_color = ui.memory_mut(|m| {
+        m.data.get_temp::<String>(last_color_id).unwrap_or_default()
+    });
+
+    // Get editing text from memory, or initialize from color
+    let mut hex = ui.memory_mut(|m| {
+        m.data.get_temp::<String>(id).unwrap_or_else(|| color_hex.clone())
+    });
+
+    // If color changed externally (picker), update hex to match
+    if last_color != color_hex {
+        hex = color_hex.clone();
+    }
+
+    let resp = ui.add(
+        egui::TextEdit::singleline(&mut hex)
+            .desired_width(72.0)
+            .font(egui::TextStyle::Monospace),
+    );
+
+    // Save editing text and current color to memory
+    ui.memory_mut(|m| {
+        m.data.insert_temp(id, hex.clone());
+        m.data.insert_temp(last_color_id, color_hex.clone());
+    });
+
+    // Apply on Enter
+    if resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if let Some(c) = parse_hex_color(&hex) {
+            *color = c;
+            changed = true;
+        }
+        ui.memory_mut(|m| m.surrender_focus(id));
+    }
+
+    // Apply on focus loss
+    if resp.lost_focus() {
         if let Some(c) = parse_hex_color(&hex) {
             *color = c;
             changed = true;

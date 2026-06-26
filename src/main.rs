@@ -13,10 +13,18 @@ pub mod svg_doc;
 fn main() -> eframe::Result<()> {
     env_logger::init();
 
+    // Load app icon
+    let icon_data = egui::IconData {
+        rgba: include_bytes!("../icon.rgba").to_vec(),
+        width: 256,
+        height: 256,
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("SVG Editor"),
+            .with_title("SVG Editor")
+            .with_icon(icon_data),
         centered: true,
         ..Default::default()
     };

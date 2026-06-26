@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_text_to_paths() {
-        let paths = text_to_paths("Hello", 100.0, 100.0, 72.0, "sans-serif");
+        let paths = text_to_paths("Hello", 100.0, 100.0, 72.0, "sans-serif", false, false);
         println!("text_to_paths returned {} paths", paths.len());
         assert!(!paths.is_empty(), "Should have converted text to paths");
     }
@@ -628,10 +628,12 @@ mod tests {
 
 /// Convert text to path commands using resvg's text-to-path conversion.
 /// Returns a list of EditablePath, one per glyph or text run.
-pub fn text_to_paths(text: &str, x: f32, y: f32, font_size: f32, font_family: &str) -> Vec<EditablePath> {
+pub fn text_to_paths(text: &str, x: f32, y: f32, font_size: f32, font_family: &str, bold: bool, italic: bool) -> Vec<EditablePath> {
+    let font_weight = if bold { "bold" } else { "normal" };
+    let font_style = if italic { "italic" } else { "normal" };
     let svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">
-            <text x="{}" y="{}" font-size="{}" font-family="{}" fill="black">{}</text>
+            <text x="{}" y="{}" font-size="{}" font-family="{}" font-weight="{}" font-style="{}" fill="black">{}</text>
         </svg>"#,
         x + font_size * text.len() as f32,
         y + font_size * 2.0,
@@ -641,6 +643,8 @@ pub fn text_to_paths(text: &str, x: f32, y: f32, font_size: f32, font_family: &s
         y + font_size * 0.8,
         font_size,
         font_family,
+        font_weight,
+        font_style,
         text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
     );
 

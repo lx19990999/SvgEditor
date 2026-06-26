@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=SVG Editor
+Comment=A cross-platform SVG editor built with Rust and egui
+Exec=svg-editor
+Icon=svg-editor
+Terminal=false
+Type=Application
+Categories=Graphics;2DGraphics;VectorGraphics;
+Keywords=svg;editor;vector;graphics;
+StartupWMClass=svg-editor

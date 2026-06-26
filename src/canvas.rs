@@ -18,8 +18,8 @@ pub struct CanvasState {
     pub zoom: f32,
     /// Pan offset in screen coordinates.
     pub pan: Vec2,
-    /// Currently selected path index.
-    pub selected_path: Option<usize>,
+    /// Selected path indices (multi-select with Ctrl+click).
+    pub selected_paths: Vec<usize>,
     /// Currently dragged point index.
     pub dragging: Option<DragState>,
     /// Drawing mode: collecting points for a new path.
@@ -40,10 +40,14 @@ pub struct CanvasState {
     pub text_font_size: f32,
     /// Font family for text input.
     pub text_font_family: String,
+    /// Font weight (bold).
+    pub text_bold: bool,
+    /// Font style (italic).
+    pub text_italic: bool,
     /// Available system font families.
     pub font_list: Vec<String>,
     /// Finalized text ready to be converted to paths (consumed by app.rs).
-    pub finalized_text: Option<(String, Pos2, f32, String)>,
+    pub finalized_text: Option<(String, Pos2, f32, String, bool, bool)>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,7 +62,7 @@ impl Default for CanvasState {
         Self {
             zoom: 1.0,
             pan: Vec2::ZERO,
-            selected_path: None,
+            selected_paths: Vec::new(),
             dragging: None,
             drawing_mode: false,
             drawing_points: Vec::new(),
@@ -69,6 +73,8 @@ impl Default for CanvasState {
             text_input: String::new(),
             text_font_size: 72.0,
             text_font_family: "sans-serif".to_string(),
+            text_bold: false,
+            text_italic: false,
             font_list: Vec::new(),
             finalized_text: None,
         }
@@ -128,12 +134,13 @@ pub fn show_canvas(
         )
     };
 
-    if let Some(idx) = state.selected_path {
+    // Draw control points for all selected paths
+    let selected: Vec<usize> = state.selected_paths.clone();
+    for &idx in &selected {
         if let Some(path) = doc.paths.get(idx) {
             let (cx, cy) = path_center_f(path);
             let w = bbox_w(path);
             let h = bbox_h(path);
-            // Pivot in original coordinates (same as SVG export computes)
             let pcx = cx + (path.pivot_x - 0.5) * w;
             let pcy = cy + (path.pivot_y - 0.5) * h;
             let tx = path.translate_x;
@@ -144,18 +151,13 @@ pub fn show_canvas(
             let cos_r = rot.cos();
             let sin_r = rot.sin();
 
-            // SVG transform order: scale(origin) → rotate(pivot) → translate
-            // rotate(angle, cx, cy) uses the ORIGINAL pivot (not scaled)
             let xform_svg = move |p: Pos2| -> Pos2 {
-                // 1. Scale around origin
                 let sxp = p.x * sx;
                 let syp = p.y * sy;
-                // 2. Rotate around ORIGINAL pivot (pcx, pcy)
                 let dx = sxp - pcx;
                 let dy = syp - pcy;
                 let rx = dx * cos_r - dy * sin_r + pcx;
                 let ry = dx * sin_r + dy * cos_r + pcy;
-                // 3. Translate
                 Pos2::new(rx + tx, ry + ty)
             };
 
@@ -338,9 +340,11 @@ fn handle_text_mode(
         if !state.text_input.is_empty() {
             let font_size = state.text_font_size;
             let font_family = &state.text_font_family;
+            let font_weight = if state.text_bold { "bold" } else { "normal" };
+            let font_style = if state.text_italic { "italic" } else { "normal" };
             let preview_svg = format!(
                 r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">
-                    <text x="0" y="{}" font-size="{}" font-family="{}" fill="rgba(0,150,255,0.7)">{}</text>
+                    <text x="0" y="{}" font-size="{}" font-family="{}" font-weight="{}" font-style="{}" fill="rgba(0,150,255,0.7)">{}</text>
                 </svg>"#,
                 font_size * state.text_input.len() as f32 * 0.8,
                 font_size * 1.5,
@@ -349,6 +353,8 @@ fn handle_text_mode(
                 font_size * 0.85,
                 font_size,
                 font_family,
+                font_weight,
+                font_style,
                 state.text_input.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
             );
 
@@ -421,6 +427,8 @@ fn handle_text_mode(
             state.text_position.take().unwrap(),
             state.text_font_size,
             state.text_font_family.clone(),
+            state.text_bold,
+            state.text_italic,
         ));
         state.text_mode = false;
     }
