@@ -332,7 +332,7 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
 fn color_picker_button(ui: &mut egui::Ui, color: &mut Color32) -> bool {
     let mut changed = false;
 
-    // Color picker button
+    // Color preview button
     if egui::color_picker::color_edit_button_srgba(
         ui,
         color,
@@ -345,7 +345,9 @@ fn color_picker_button(ui: &mut egui::Ui, color: &mut Color32) -> bool {
 
     // Hex input field
     let mut hex = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
-    let te = egui::TextEdit::singleline(&mut hex).desired_width(72.0).font(egui::TextStyle::Monospace);
+    let te = egui::TextEdit::singleline(&mut hex)
+        .desired_width(72.0)
+        .font(egui::TextStyle::Monospace);
     if ui.add(te).changed() {
         if let Some(c) = parse_hex_color(&hex) {
             *color = c;
