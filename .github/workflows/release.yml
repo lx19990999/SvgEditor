@@ -65,13 +65,13 @@ jobs:
       - name: Rename binary (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/svg-editor ${{ matrix.artifact_name }}
+          cp target/${{ matrix.target }}/release/svg_editor ${{ matrix.artifact_name }}
           chmod +x ${{ matrix.artifact_name }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/svg-editor.exe ${{ matrix.artifact_name }}
+          cp target/${{ matrix.target }}/release/svg_editor.exe ${{ matrix.artifact_name }}
 
       - name: Package (Linux/macOS)
         if: runner.os != 'Windows'
