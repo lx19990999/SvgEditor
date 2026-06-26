@@ -82,6 +82,13 @@ static TRANSLATIONS: LazyLock<HashMap<&'static str, Trans>> = LazyLock::new(|| {
         m.insert("toolbar.draw", tr("Draw", "绘制"));
         m.insert("toolbar.drawing", tr("Drawing", "绘制中"));
         m.insert("toolbar.drawing_hint", tr("Click to add points, dbl-click/Enter to finish, Esc to cancel", "点击添加节点，双击/回车完成，Esc取消"));
+        m.insert("toolbar.text", tr("Text", "文字"));
+        m.insert("toolbar.texting", tr("Text input", "文字输入"));
+        m.insert("toolbar.text_hint", tr("Click canvas to set position, then type and press Enter", "点击画板设置位置，输入文字后回车确认"));
+        m.insert("props.text_content", tr("Text:", "文字:"));
+        m.insert("props.text_size", tr("Size:", "字号:"));
+        m.insert("props.text_font", tr("Font:", "字体:"));
+        m.insert("props.text_font_count", tr("fonts available", "个可用字体"));
         m.insert("toolbar.dpi", tr("DPI", "DPI"));
         m.insert("toolbar.language", tr("Language", "语言"));
         m.insert("toolbar.theme", tr("Theme", "主题"));

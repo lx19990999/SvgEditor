@@ -12,7 +12,7 @@ eframe = { version = "0.34", default-features = false, features = [
 egui = { version = "0.34", default-features = false, features = [
     "default_fonts",
 ] }
-resvg = { version = "0.45.1", default-features = false }
+resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rfd = "0.17.2"
 env_logger = { version = "0.11.8", default-features = false }

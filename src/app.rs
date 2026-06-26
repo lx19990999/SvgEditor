@@ -38,9 +38,14 @@ impl SvgEditorApp {
         }
         // If dpi == 0, we'll auto-detect on first frame
 
+        let mut canvas_state = CanvasState::default();
+
+        // Load system font list for text input
+        canvas_state.font_list = load_system_font_families();
+
         Self {
             doc: None,
-            canvas_state: CanvasState::default(),
+            canvas_state,
             status_msg: i18n::t("status.ready", &lang).to_string(),
             error_msg: None,
             config,
@@ -63,7 +68,9 @@ impl SvgEditorApp {
                         doc.paths.len(),
                         i18n::t("paths.heading", &self.lang).to_lowercase(),
                     );
+                    let saved_font_list = std::mem::take(&mut self.canvas_state.font_list);
                     self.canvas_state = CanvasState::default();
+                    self.canvas_state.font_list = saved_font_list;
                     self.history = Some(History::new(doc.clone()));
                     self.doc = Some(doc);
                     self.texture = None;
@@ -367,6 +374,20 @@ impl eframe::App for SvgEditorApp {
                         self.canvas_state.drawing_mode = !self.canvas_state.drawing_mode;
                         self.canvas_state.drawing_points.clear();
                         self.canvas_state.drawing_closed = false;
+                        self.canvas_state.text_mode = false;
+                    }
+
+                    // Text mode toggle
+                    let text_label = if self.canvas_state.text_mode {
+                        format!("T {} [{}]", i18n::t("toolbar.texting", &lang), i18n::t("toolbar.text_hint", &lang))
+                    } else {
+                        format!("T {}", i18n::t("toolbar.text", &lang))
+                    };
+                    if ui.selectable_label(self.canvas_state.text_mode, text_label).clicked() {
+                        self.canvas_state.text_mode = !self.canvas_state.text_mode;
+                        self.canvas_state.text_position = None;
+                        self.canvas_state.text_input.clear();
+                        self.canvas_state.drawing_mode = false;
                     }
                 }
 
@@ -534,6 +555,94 @@ impl eframe::App for SvgEditorApp {
                 }
             }
 
+            // Consume finalized text and convert to paths
+            let finalized_text = self.canvas_state.finalized_text.take();
+            if let Some((text, pos, font_size, font_family)) = finalized_text {
+                if !text.is_empty() && self.doc.is_some() {
+                    let new_paths = crate::svg_doc::text_to_paths(&text, pos.x, pos.y, font_size, &font_family);
+                    if !new_paths.is_empty() {
+                        self.save_history();
+                        let doc = self.doc.as_mut().unwrap();
+                        let count = new_paths.len();
+                        doc.paths.extend(new_paths);
+                        self.canvas_state.selected_path = Some(doc.paths.len() - 1);
+                        self.texture = None;
+                        self.status_msg = format!("{}: {} ({} {})",
+                            i18n::t("status.new_path", &self.lang),
+                            text,
+                            count,
+                            i18n::t("paths.heading", &self.lang).to_lowercase());
+                    }
+                }
+            }
+
+            // Text input UI overlay
+            if self.canvas_state.text_mode {
+                egui::Window::new(i18n::t("toolbar.text", &self.lang))
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 10.0))
+                    .show(ui.ctx(), |ui| {
+                        ui.label(i18n::t("toolbar.text_hint", &self.lang));
+                        ui.horizontal(|ui| {
+                            ui.label(i18n::t("props.text_content", &self.lang));
+                            let r = ui.text_edit_singleline(&mut self.canvas_state.text_input);
+                            if r.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                // Enter pressed in text field - finalize
+                                if let Some(pos) = self.canvas_state.text_position {
+                                    if !self.canvas_state.text_input.is_empty() {
+                                        let text = std::mem::take(&mut self.canvas_state.text_input);
+                                        self.canvas_state.finalized_text =
+                                            Some((text, pos, self.canvas_state.text_font_size, self.canvas_state.text_font_family.clone()));
+                                        self.canvas_state.text_mode = false;
+                                        self.canvas_state.text_position = None;
+                                    }
+                                }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(i18n::t("props.text_size", &self.lang));
+                            ui.add(
+                                egui::DragValue::new(&mut self.canvas_state.text_font_size)
+                                    .speed(1.0)
+                                    .range(8.0..=f32::MAX),
+                            );
+                        });
+                        // Font family selector
+                        ui.horizontal(|ui| {
+                            ui.label(i18n::t("props.text_font", &self.lang));
+                            let font_list: Vec<String> = self.canvas_state.font_list.clone();
+                            egui::ComboBox::from_id_salt("font_select")
+                                .selected_text(&self.canvas_state.text_font_family)
+                                .width(200.0)
+                                .show_ui(ui, |ui| {
+                                    ui.label(format!("({} {})", font_list.len(), i18n::t("props.text_font_count", &self.lang)));
+                                    ui.separator();
+                                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                                        for family in &font_list {
+                                            if ui
+                                                .selectable_label(
+                                                    self.canvas_state.text_font_family == *family,
+                                                    family,
+                                                )
+                                                .clicked()
+                                            {
+                                                self.canvas_state.text_font_family = family.clone();
+                                            }
+                                        }
+                                    });
+                                });
+                        });
+                        if ui.button(i18n::t("menu.quit", &self.lang)).clicked() {
+                            self.canvas_state.text_mode = false;
+                            self.canvas_state.text_position = None;
+                            self.canvas_state.text_input.clear();
+                        }
+                    });
+            }
+
             if let Some(ref doc) = self.doc {
                 let old_selected = self.canvas_state.selected_path;
 
@@ -595,4 +704,26 @@ impl eframe::App for SvgEditorApp {
             }
         });
     }
+}
+
+/// Load system font family names using fontdb.
+fn load_system_font_families() -> Vec<String> {
+    let mut fontdb = resvg::usvg::fontdb::Database::new();
+    let count_before = fontdb.len();
+    fontdb.load_system_fonts();
+    let count_after = fontdb.len();
+    log::info!("fontdb: before={}, after={}", count_before, count_after);
+
+    let mut families = std::collections::BTreeSet::new();
+    for face in fontdb.faces() {
+        for (name, _lang) in &face.families {
+            families.insert(name.clone());
+        }
+    }
+    let result: Vec<String> = families.into_iter().collect();
+    log::info!("Font families found: {}", result.len());
+    if result.is_empty() {
+        log::warn!("No font families found! fontdb has {} faces", count_after);
+    }
+    result
 }

@@ -583,6 +583,13 @@ mod tests {
     }
 
     #[test]
+    fn test_text_to_paths() {
+        let paths = text_to_paths("Hello", 100.0, 100.0, 72.0, "sans-serif");
+        println!("text_to_paths returned {} paths", paths.len());
+        assert!(!paths.is_empty(), "Should have converted text to paths");
+    }
+
+    #[test]
     fn test_han_svg_with_group_transform() {
         let bytes = std::fs::read("/home/flutter/source/SvgEditor/han.svg").unwrap();
         let doc = SvgDoc::from_bytes(&bytes, None).unwrap();
@@ -616,6 +623,105 @@ mod tests {
                 i, p.commands.len(), min_x, max_x, min_y, max_y);
         }
         assert!(!doc.paths.is_empty(), "Should have extracted paths from han.svg");
+    }
+}
+
+/// Convert text to path commands using resvg's text-to-path conversion.
+/// Returns a list of EditablePath, one per glyph or text run.
+pub fn text_to_paths(text: &str, x: f32, y: f32, font_size: f32, font_family: &str) -> Vec<EditablePath> {
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">
+            <text x="{}" y="{}" font-size="{}" font-family="{}" fill="black">{}</text>
+        </svg>"#,
+        x + font_size * text.len() as f32,
+        y + font_size * 2.0,
+        x + font_size * text.len() as f32,
+        y + font_size * 2.0,
+        x,
+        y + font_size * 0.8,
+        font_size,
+        font_family,
+        text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    );
+
+    let mut opts = resvg::usvg::Options::default();
+    let mut fontdb = resvg::usvg::fontdb::Database::new();
+    fontdb.load_system_fonts();
+    opts.fontdb = std::sync::Arc::new(fontdb);
+
+    let tree = match resvg::usvg::Tree::from_data(svg.as_bytes(), &opts) {
+        Ok(tree) => tree,
+        Err(e) => {
+            log::error!("text_to_paths: failed to parse SVG: {}", e);
+            return Vec::new();
+        }
+    };
+
+    // usvg keeps text as Text nodes. Use to_string() to convert text to paths,
+    // then re-parse the result to get Path nodes.
+    let write_opts = resvg::usvg::WriteOptions {
+        preserve_text: false, // Convert text to paths
+        ..Default::default()
+    };
+    let svg_out = tree.to_string(&write_opts);
+
+    let tree2 = match resvg::usvg::Tree::from_data(svg_out.as_bytes(), &opts) {
+        Ok(tree) => tree,
+        Err(e) => {
+            log::error!("text_to_paths: failed to re-parse SVG: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let mut paths = Vec::new();
+    extract_text_paths(tree2.root(), &mut paths);
+    paths
+}
+
+/// Recursively extract paths from usvg tree (for text-to-path).
+fn extract_text_paths(group: &resvg::usvg::Group, paths: &mut Vec<EditablePath>) {
+    for node in group.children() {
+        match node {
+            resvg::usvg::Node::Path(path) => {
+                let commands: Vec<PathCmd> = path
+                    .data()
+                    .segments()
+                    .map(|seg| match seg {
+                        resvg::tiny_skia::PathSegment::MoveTo(p) => PathCmd::MoveTo(p.x, p.y),
+                        resvg::tiny_skia::PathSegment::LineTo(p) => PathCmd::LineTo(p.x, p.y),
+                        resvg::tiny_skia::PathSegment::QuadTo(p0, p1) => {
+                            PathCmd::QuadTo(p0.x, p0.y, p1.x, p1.y)
+                        }
+                        resvg::tiny_skia::PathSegment::CubicTo(p0, p1, p2) => {
+                            PathCmd::CurveTo(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y)
+                        }
+                        resvg::tiny_skia::PathSegment::Close => PathCmd::Close,
+                    })
+                    .collect();
+
+                if !commands.is_empty() {
+                    paths.push(EditablePath {
+                        id: String::new(),
+                        fill_color: Some(Color32::BLACK),
+                        stroke_color: None,
+                        stroke_width: 0.0,
+                        commands,
+                        translate_x: 0.0,
+                        translate_y: 0.0,
+                        scale_x: 1.0,
+                        scale_y: 1.0,
+                        scale_locked: true,
+                        rotation: 0.0,
+                        pivot_x: 0.5,
+                        pivot_y: 0.5,
+                    });
+                }
+            }
+            resvg::usvg::Node::Group(g) => {
+                extract_text_paths(g, paths);
+            }
+            _ => {}
+        }
     }
 }
 

@@ -40,10 +40,10 @@ Download the latest release for your platform from the [Releases](../../releases
 
 ```bash
 # Debian/Ubuntu
-sudo apt-get install libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev
+sudo apt-get install libwayland-dev libxkbcommon-dev libgtk-3-dev libssl-dev libfontconfig-dev
 
 # Fedora
-sudo dnf install wayland-devel libxkbcommon-devel gtk3-devel openssl-devel
+sudo dnf install wayland-devel libxkbcommon-devel gtk3-devel openssl-devel fontconfig-devel
 ```
 
 ### Build

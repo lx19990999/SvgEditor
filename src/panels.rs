@@ -330,10 +330,62 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
 
 /// Show a color picker button with a preview. Returns `true` if color changed.
 fn color_picker_button(ui: &mut egui::Ui, color: &mut Color32) -> bool {
-    egui::color_picker::color_edit_button_srgba(
+    let mut changed = false;
+
+    // Color picker button
+    if egui::color_picker::color_edit_button_srgba(
         ui,
         color,
         egui::color_picker::Alpha::Opaque,
     )
     .changed()
+    {
+        changed = true;
+    }
+
+    // Hex input field
+    let mut hex = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
+    let te = egui::TextEdit::singleline(&mut hex).desired_width(72.0).font(egui::TextStyle::Monospace);
+    if ui.add(te).changed() {
+        if let Some(c) = parse_hex_color(&hex) {
+            *color = c;
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+/// Parse a hex color string like "#ff0000" or "ff0000" or "#f00" into Color32.
+fn parse_hex_color(s: &str) -> Option<Color32> {
+    let s = s.trim().strip_prefix('#').unwrap_or(s.trim());
+    let s = match s.len() {
+        3 => {
+            // Short form: "f00" -> "ff0000"
+            let mut expanded = String::with_capacity(6);
+            for c in s.chars() {
+                expanded.push(c);
+                expanded.push(c);
+            }
+            expanded
+        }
+        6 => s.to_string(),
+        8 => s.to_string(),
+        _ => return None,
+    };
+
+    if s.len() == 6 {
+        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+        Some(Color32::from_rgb(r, g, b))
+    } else if s.len() == 8 {
+        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+        let a = u8::from_str_radix(&s[6..8], 16).ok()?;
+        Some(Color32::from_rgba_unmultiplied(r, g, b, a))
+    } else {
+        None
+    }
 }

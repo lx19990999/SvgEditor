@@ -2,6 +2,15 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2};
 
 use crate::svg_doc::{EditablePath, PathCmd, SvgDoc};
 
+/// Create usvg::Options with system fonts loaded (for text rendering).
+fn usvg_opts_with_fonts() -> resvg::usvg::Options<'static> {
+    let mut opts = resvg::usvg::Options::default();
+    let mut fontdb = resvg::usvg::fontdb::Database::new();
+    fontdb.load_system_fonts();
+    opts.fontdb = std::sync::Arc::new(fontdb);
+    opts
+}
+
 /// Canvas state: zoom, pan, cached texture.
 #[derive(Clone, Debug)]
 pub struct CanvasState {
@@ -21,6 +30,20 @@ pub struct CanvasState {
     pub drawing_closed: bool,
     /// Finalized drawing ready to be added as a new path (consumed by app.rs).
     pub finalized_drawing: Option<(Vec<Pos2>, bool)>,
+    /// Text input mode.
+    pub text_mode: bool,
+    /// Text input position in SVG coordinates (set by first click).
+    pub text_position: Option<Pos2>,
+    /// Text being entered.
+    pub text_input: String,
+    /// Font size for text input.
+    pub text_font_size: f32,
+    /// Font family for text input.
+    pub text_font_family: String,
+    /// Available system font families.
+    pub font_list: Vec<String>,
+    /// Finalized text ready to be converted to paths (consumed by app.rs).
+    pub finalized_text: Option<(String, Pos2, f32, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +64,13 @@ impl Default for CanvasState {
             drawing_points: Vec::new(),
             drawing_closed: false,
             finalized_drawing: None,
+            text_mode: false,
+            text_position: None,
+            text_input: String::new(),
+            text_font_size: 72.0,
+            text_font_family: "sans-serif".to_string(),
+            font_list: Vec::new(),
+            finalized_text: None,
         }
     }
 }
@@ -163,7 +193,12 @@ pub fn show_canvas(
 
     // Drawing mode: collect points for a new path
     if state.drawing_mode {
-        handle_drawing(ui, &painter, response, doc, state, svg_to_screen, canvas_rect, total_scale, offset);
+        handle_drawing(ui, &painter, &response, doc, state, svg_to_screen, canvas_rect, total_scale, offset);
+    }
+
+    // Text input mode
+    if state.text_mode {
+        handle_text_mode(ui, &painter, &response, state, svg_to_screen, total_scale, offset);
     }
 }
 
@@ -171,7 +206,7 @@ pub fn show_canvas(
 fn handle_drawing(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
-    response: egui::Response,
+    response: &egui::Response,
     doc: &SvgDoc,
     state: &mut CanvasState,
     svg_to_screen: impl Fn(Pos2) -> Pos2 + Copy,
@@ -265,6 +300,132 @@ fn finalize_drawing(_doc: &SvgDoc, state: &mut CanvasState) {
     state.drawing_closed = false;
 }
 
+/// Handle text input mode: click to set position, show text input UI, finalize on Enter.
+fn handle_text_mode(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    response: &egui::Response,
+    state: &mut CanvasState,
+    svg_to_screen: impl Fn(Pos2) -> Pos2 + Copy,
+    total_scale: f32,
+    _offset: Pos2,
+) {
+    // Cancel with Escape
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.text_mode = false;
+        state.text_position = None;
+        state.text_input.clear();
+        return;
+    }
+
+    // Click to set position
+    if response.clicked() && state.text_position.is_none() {
+        if let Some(mouse_pos) = ui.input(|i| i.pointer.latest_pos()) {
+            let svg_x = (mouse_pos.x - _offset.x) / total_scale;
+            let svg_y = (mouse_pos.y - _offset.y) / total_scale;
+            state.text_position = Some(Pos2::new(svg_x, svg_y));
+        }
+    }
+
+    // Draw preview using resvg (same engine as conversion, so sizes match)
+    if let Some(pos) = state.text_position {
+        let sp = svg_to_screen(pos);
+        // Draw insertion point
+        painter.circle_filled(sp, 4.0, Color32::from_rgb(255, 0, 0));
+        painter.circle_stroke(sp, 4.0, Stroke::new(1.5, Color32::WHITE));
+
+        // Render text preview using resvg
+        if !state.text_input.is_empty() {
+            let font_size = state.text_font_size;
+            let font_family = &state.text_font_family;
+            let preview_svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">
+                    <text x="0" y="{}" font-size="{}" font-family="{}" fill="rgba(0,150,255,0.7)">{}</text>
+                </svg>"#,
+                font_size * state.text_input.len() as f32 * 0.8,
+                font_size * 1.5,
+                font_size * state.text_input.len() as f32 * 0.8,
+                font_size * 1.5,
+                font_size * 0.85,
+                font_size,
+                font_family,
+                state.text_input.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+            );
+
+            if let Ok(tree) = resvg::usvg::Tree::from_data(
+                preview_svg.as_bytes(),
+                &usvg_opts_with_fonts(),
+            ) {
+                let tw = tree.size().width().max(1.0) as u32;
+                let th = tree.size().height().max(1.0) as u32;
+                if let Some(mut pixmap) = resvg::tiny_skia::Pixmap::new(tw, th) {
+                    resvg::render(
+                        &tree,
+                        resvg::tiny_skia::Transform::default(),
+                        &mut pixmap.as_mut(),
+                    );
+
+                    // Convert pixmap to egui texture and display
+                    let pixels: Vec<Color32> = pixmap
+                        .pixels()
+                        .iter()
+                        .map(|p| {
+                            let a = p.alpha();
+                            if a == 0 {
+                                Color32::TRANSPARENT
+                            } else {
+                                let r = (p.red() as u16 * 255 / a as u16) as u8;
+                                let g = (p.green() as u16 * 255 / a as u16) as u8;
+                                let b = (p.blue() as u16 * 255 / a as u16) as u8;
+                                Color32::from_rgba_unmultiplied(r, g, b, a)
+                            }
+                        })
+                        .collect();
+
+                    let color_image = egui::ColorImage {
+                        size: [tw as usize, th as usize],
+                        source_size: egui::Vec2::new(tw as f32, th as f32),
+                        pixels,
+                    };
+                    let tex = ui.ctx().load_texture(
+                        "text_preview",
+                        color_image,
+                        egui::TextureOptions::LINEAR,
+                    );
+
+                    // Calculate display rect in screen coordinates
+                    let svg_w = tree.size().width();
+                    let svg_h = tree.size().height();
+                    let screen_rect = Rect::from_min_size(
+                        sp,
+                        egui::vec2(svg_w * total_scale, svg_h * total_scale),
+                    );
+                    painter.image(
+                        tex.id(),
+                        screen_rect,
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+            }
+        }
+    }
+
+    // Finalize on Enter (if text is not empty and position is set)
+    if ui.input(|i| i.key_pressed(egui::Key::Enter))
+        && state.text_position.is_some()
+        && !state.text_input.is_empty()
+    {
+        state.finalized_text = Some((
+            std::mem::take(&mut state.text_input),
+            state.text_position.take().unwrap(),
+            state.text_font_size,
+            state.text_font_family.clone(),
+        ));
+        state.text_mode = false;
+    }
+}
+
 /// Render the SVG document to a ColorImage using resvg.
 /// The image has a checkerboard background with the SVG drawn on top.
 fn render_svg_to_image(doc: &SvgDoc, max_size: u32) -> egui::ColorImage {
@@ -294,7 +455,7 @@ fn render_svg_to_image(doc: &SvgDoc, max_size: u32) -> egui::ColorImage {
     // Generate SVG string from our model and render with resvg
     let svg_string = doc.to_svg_string();
     if let Ok(tree) =
-        resvg::usvg::Tree::from_data(svg_string.as_bytes(), &resvg::usvg::Options::default())
+        resvg::usvg::Tree::from_data(svg_string.as_bytes(), &usvg_opts_with_fonts())
     {
         let tree_size = tree.size();
         let scale_x = w as f32 / tree_size.width();
