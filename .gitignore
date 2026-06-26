@@ -1,0 +1,7 @@
+/target
+.idea
+*.png
+!screenshots/*.png
+*.svg
+/egui
+*.txt
