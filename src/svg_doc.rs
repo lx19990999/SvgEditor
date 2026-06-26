@@ -480,11 +480,8 @@ impl SvgDoc {
 
         // Render SVG
         let svg_string = self.to_svg_string();
-        let tree = resvg::usvg::Tree::from_data(
-            svg_string.as_bytes(),
-            &resvg::usvg::Options::default(),
-        )
-        .map_err(|e| e.to_string())?;
+        let tree = resvg::usvg::Tree::from_data(svg_string.as_bytes(), &crate::fonts::usvg_opts())
+            .map_err(|e| e.to_string())?;
 
         let tree_size = tree.size();
         let scale_x = w as f32 / tree_size.width();
@@ -648,10 +645,7 @@ pub fn text_to_paths(text: &str, x: f32, y: f32, font_size: f32, font_family: &s
         text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
     );
 
-    let mut opts = resvg::usvg::Options::default();
-    let mut fontdb = resvg::usvg::fontdb::Database::new();
-    fontdb.load_system_fonts();
-    opts.fontdb = std::sync::Arc::new(fontdb);
+    let opts = crate::fonts::usvg_opts();
 
     let tree = match resvg::usvg::Tree::from_data(svg.as_bytes(), &opts) {
         Ok(tree) => tree,

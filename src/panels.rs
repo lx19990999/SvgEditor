@@ -97,7 +97,14 @@ pub fn show_path_list(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSta
 
 /// Show the right panel: properties for canvas and selected path.
 /// Returns `true` if the document was modified and needs re-rendering.
-pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasState, lang: &Lang) -> bool {
+/// When modified, `history_snapshot` holds the document state before this frame's edits.
+pub fn show_properties(
+    ui: &mut egui::Ui,
+    doc: &mut SvgDoc,
+    state: &mut CanvasState,
+    lang: &Lang,
+    history_snapshot: &mut Option<SvgDoc>,
+) -> bool {
     let mut changed = false;
 
     ui.heading(t("props.heading", lang));
@@ -109,20 +116,27 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", t("props.width", lang)));
                 if ui.add(egui::DragValue::new(&mut doc.width).speed(1.0).range(1.0..=10000.0)).changed() {
+                    ensure_snapshot(history_snapshot, doc);
                     changed = true;
                 }
             });
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", t("props.height", lang)));
                 if ui.add(egui::DragValue::new(&mut doc.height).speed(1.0).range(1.0..=10000.0)).changed() {
+                    ensure_snapshot(history_snapshot, doc);
                     changed = true;
                 }
             });
 
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", t("props.background", lang)));
-                changed |= hex_color_input(ui, &mut doc.bg_color, "bg_hex", 0);
+                if let Some(new) = hex_color_input(ui, doc.bg_color, "bg_hex", 0) {
+                    ensure_snapshot(history_snapshot, doc);
+                    doc.bg_color = new;
+                    changed = true;
+                }
                 if ui.small_button("✖").on_hover_text(t("props.clear_bg", lang)).clicked() {
+                    ensure_snapshot(history_snapshot, doc);
                     doc.bg_color = Color32::TRANSPARENT;
                     changed = true;
                 }
@@ -146,54 +160,63 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
                 let mut delete_requested = false;
 
                 ui.collapsing(&path_name, |ui| {
-                    let path = &mut doc.paths[idx];
-
                     // Fill color
                     ui.horizontal(|ui| {
                         ui.label(format!("{}:", t("props.fill", lang)));
-                        let mut has_fill = path.fill_color.is_some();
+                        let mut has_fill = doc.paths[idx].fill_color.is_some();
                         if ui.checkbox(&mut has_fill, "").changed() {
-                            if has_fill {
-                                path.fill_color = Some(Color32::BLACK);
-                            } else {
-                                path.fill_color = None;
-                            }
+                            ensure_snapshot(history_snapshot, doc);
                             changed = true;
+                            if has_fill {
+                                doc.paths[idx].fill_color = Some(Color32::BLACK);
+                            } else {
+                                doc.paths[idx].fill_color = None;
+                            }
                         }
-                        if let Some(ref mut fill) = path.fill_color {
-                            changed |= hex_color_input(ui, fill, "fill_hex", idx);
+                        if let Some(fill) = doc.paths[idx].fill_color {
+                            if let Some(new) = hex_color_input(ui, fill, "fill_hex", idx) {
+                                ensure_snapshot(history_snapshot, doc);
+                                doc.paths[idx].fill_color = Some(new);
+                                changed = true;
+                            }
                         }
                     });
 
                     // Stroke color
                     ui.horizontal(|ui| {
                         ui.label(format!("{}:", t("props.stroke", lang)));
-                        let mut has_stroke = path.stroke_color.is_some();
+                        let mut has_stroke = doc.paths[idx].stroke_color.is_some();
                         if ui.checkbox(&mut has_stroke, "").changed() {
+                            ensure_snapshot(history_snapshot, doc);
+                            changed = true;
                             if has_stroke {
-                                path.stroke_color = Some(Color32::BLACK);
-                                if path.stroke_width == 0.0 {
-                                    path.stroke_width = 1.0;
+                                doc.paths[idx].stroke_color = Some(Color32::BLACK);
+                                if doc.paths[idx].stroke_width == 0.0 {
+                                    doc.paths[idx].stroke_width = 1.0;
                                 }
                             } else {
-                                path.stroke_color = None;
+                                doc.paths[idx].stroke_color = None;
                             }
-                            changed = true;
                         }
-                        if let Some(ref mut stroke) = path.stroke_color {
-                            changed |= hex_color_input(ui, stroke, "stroke_hex", idx);
+                        if let Some(stroke) = doc.paths[idx].stroke_color {
+                            if let Some(new) = hex_color_input(ui, stroke, "stroke_hex", idx) {
+                                ensure_snapshot(history_snapshot, doc);
+                                doc.paths[idx].stroke_color = Some(new);
+                                changed = true;
+                            }
                         }
                     });
 
                     // Stroke width
-                    if path.stroke_color.is_some() {
+                    if doc.paths[idx].stroke_color.is_some() {
                         ui.horizontal(|ui| {
                             ui.label(format!("{}:", t("props.stroke_width", lang)));
                             if ui.add(
-                                egui::DragValue::new(&mut path.stroke_width)
+                                egui::DragValue::new(&mut doc.paths[idx].stroke_width)
                                     .speed(0.1)
                                     .range(0.1..=100.0),
                             ).changed() {
+                                ensure_snapshot(history_snapshot, doc);
                                 changed = true;
                             }
                         });
@@ -206,11 +229,13 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
                         // Position (translate)
                         ui.horizontal(|ui| {
                             ui.label(format!("{} X:", t("props.translate", lang)));
-                            if ui.add(egui::DragValue::new(&mut path.translate_x).speed(1.0)).changed() {
+                            if ui.add(egui::DragValue::new(&mut doc.paths[idx].translate_x).speed(1.0)).changed() {
+                                ensure_snapshot(history_snapshot, doc);
                                 changed = true;
                             }
                             ui.label("Y:");
-                            if ui.add(egui::DragValue::new(&mut path.translate_y).speed(1.0)).changed() {
+                            if ui.add(egui::DragValue::new(&mut doc.paths[idx].translate_y).speed(1.0)).changed() {
+                                ensure_snapshot(history_snapshot, doc);
                                 changed = true;
                             }
                         });
@@ -218,43 +243,47 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
                         // Scale
                         ui.horizontal(|ui| {
                             ui.label(format!("{} X:", t("props.scale", lang)));
-                            let r = ui.add(egui::DragValue::new(&mut path.scale_x).speed(0.01).range(0.01..=100.0));
+                            let r = ui.add(egui::DragValue::new(&mut doc.paths[idx].scale_x).speed(0.01).range(0.01..=100.0));
                             if r.changed() {
-                                if path.scale_locked {
-                                    path.scale_y = path.scale_x;
-                                }
+                                ensure_snapshot(history_snapshot, doc);
                                 changed = true;
+                                if doc.paths[idx].scale_locked {
+                                    doc.paths[idx].scale_y = doc.paths[idx].scale_x;
+                                }
                             }
 
                             // Lock aspect ratio toggle
-                            let lock_icon = if path.scale_locked { "🔗" } else { "🔓" };
-                            let lock_text = if path.scale_locked {
+                            let lock_icon = if doc.paths[idx].scale_locked { "🔗" } else { "🔓" };
+                            let lock_text = if doc.paths[idx].scale_locked {
                                 t("props.locked", lang)
                             } else {
                                 t("props.unlocked", lang)
                             };
                             if ui.small_button(lock_icon).on_hover_text(lock_text).clicked() {
-                                path.scale_locked = !path.scale_locked;
-                                if path.scale_locked {
-                                    path.scale_y = path.scale_x;
-                                    changed = true;
+                                ensure_snapshot(history_snapshot, doc);
+                                changed = true;
+                                doc.paths[idx].scale_locked = !doc.paths[idx].scale_locked;
+                                if doc.paths[idx].scale_locked {
+                                    doc.paths[idx].scale_y = doc.paths[idx].scale_x;
                                 }
                             }
 
                             ui.label("Y:");
-                            let r = ui.add(egui::DragValue::new(&mut path.scale_y).speed(0.01).range(0.01..=100.0));
+                            let r = ui.add(egui::DragValue::new(&mut doc.paths[idx].scale_y).speed(0.01).range(0.01..=100.0));
                             if r.changed() {
-                                if path.scale_locked {
-                                    path.scale_x = path.scale_y;
-                                }
+                                ensure_snapshot(history_snapshot, doc);
                                 changed = true;
+                                if doc.paths[idx].scale_locked {
+                                    doc.paths[idx].scale_x = doc.paths[idx].scale_y;
+                                }
                             }
                         });
 
                         // Rotation
                         ui.horizontal(|ui| {
                             ui.label(format!("{}:", t("props.rotation", lang)));
-                            if ui.add(egui::DragValue::new(&mut path.rotation).speed(1.0).suffix("°")).changed() {
+                            if ui.add(egui::DragValue::new(&mut doc.paths[idx].rotation).speed(1.0).suffix("°")).changed() {
+                                ensure_snapshot(history_snapshot, doc);
                                 changed = true;
                             }
                         });
@@ -262,11 +291,13 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
                         // Pivot
                         ui.horizontal(|ui| {
                             ui.label(format!("{} X:", t("props.pivot", lang)));
-                            if ui.add(egui::DragValue::new(&mut path.pivot_x).speed(0.01).range(0.0..=1.0)).changed() {
+                            if ui.add(egui::DragValue::new(&mut doc.paths[idx].pivot_x).speed(0.01).range(0.0..=1.0)).changed() {
+                                ensure_snapshot(history_snapshot, doc);
                                 changed = true;
                             }
                             ui.label("Y:");
-                            if ui.add(egui::DragValue::new(&mut path.pivot_y).speed(0.01).range(0.0..=1.0)).changed() {
+                            if ui.add(egui::DragValue::new(&mut doc.paths[idx].pivot_y).speed(0.01).range(0.0..=1.0)).changed() {
+                                ensure_snapshot(history_snapshot, doc);
                                 changed = true;
                             }
                         });
@@ -274,11 +305,11 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
 
                     ui.separator();
 
-                    ui.label(format!("{}: {}", t("props.commands", lang), path.commands.len()));
+                    ui.label(format!("{}: {}", t("props.commands", lang), doc.paths[idx].commands.len()));
 
                     // Path source code editor
                     ui.collapsing(t("props.source", lang), |ui| {
-                        let mut d_string = path.to_d_string();
+                        let mut d_string = doc.paths[idx].to_d_string();
                         let te = egui::TextEdit::multiline(&mut d_string)
                             .font(egui::TextStyle::Monospace)
                             .desired_width(f32::INFINITY)
@@ -286,7 +317,8 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
                         if ui.add(te).changed() {
                             if let Some(new_cmds) = crate::svg_doc::EditablePath::parse_d_string(&d_string) {
                                 if !new_cmds.is_empty() {
-                                    path.commands = new_cmds;
+                                    ensure_snapshot(history_snapshot, doc);
+                                    doc.paths[idx].commands = new_cmds;
                                     changed = true;
                                 }
                             }
@@ -299,6 +331,7 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
                 });
 
                 if delete_requested {
+                    ensure_snapshot(history_snapshot, doc);
                     doc.paths.remove(idx);
                     state.selected_paths.clear();
                     changed = true;
@@ -331,19 +364,27 @@ pub fn show_properties(ui: &mut egui::Ui, doc: &mut SvgDoc, state: &mut CanvasSt
     changed
 }
 
+/// Save the document state before the first edit in this frame (for undo).
+fn ensure_snapshot(history_snapshot: &mut Option<SvgDoc>, doc: &SvgDoc) {
+    if history_snapshot.is_none() {
+        *history_snapshot = Some(doc.clone());
+    }
+}
+
 /// Hex color input with color picker and swatch preview.
-/// Uses widget memory to preserve user edits across frames.
-/// Returns true if color was changed.
-fn hex_color_input(ui: &mut egui::Ui, color: &mut Color32, tag: &str, idx: usize) -> bool {
-    let mut changed = false;
+/// Uses a local color buffer so the caller can snapshot before applying.
+/// Returns `Some(new_color)` when the color should be updated.
+fn hex_color_input(ui: &mut egui::Ui, color: Color32, tag: &str, idx: usize) -> Option<Color32> {
+    let mut local = color;
+    let mut local_changed = false;
 
     // Color picker button (click to open full color picker)
-    if egui::color_picker::color_edit_button_srgba(ui, color, egui::color_picker::Alpha::Opaque).changed() {
-        changed = true;
+    if egui::color_picker::color_edit_button_srgba(ui, &mut local, egui::color_picker::Alpha::Opaque).changed() {
+        local_changed = true;
     }
 
     let id = ui.make_persistent_id((tag, idx));
-    let color_hex = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
+    let color_hex = format!("#{:02x}{:02x}{:02x}", local.r(), local.g(), local.b());
 
     // Track the last known color to detect external changes (from color picker)
     let last_color_id = ui.make_persistent_id((tag, "last_color", idx));
@@ -376,8 +417,10 @@ fn hex_color_input(ui: &mut egui::Ui, color: &mut Color32, tag: &str, idx: usize
     // Apply on Enter
     if resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         if let Some(c) = parse_hex_color(&hex) {
-            *color = c;
-            changed = true;
+            if c != local {
+                local = c;
+                local_changed = true;
+            }
         }
         ui.memory_mut(|m| m.surrender_focus(id));
     }
@@ -385,12 +428,18 @@ fn hex_color_input(ui: &mut egui::Ui, color: &mut Color32, tag: &str, idx: usize
     // Apply on focus loss
     if resp.lost_focus() {
         if let Some(c) = parse_hex_color(&hex) {
-            *color = c;
-            changed = true;
+            if c != local {
+                local = c;
+                local_changed = true;
+            }
         }
     }
 
-    changed
+    if local_changed && local != color {
+        Some(local)
+    } else {
+        None
+    }
 }
 
 /// Parse a hex color string like "#ff0000" or "ff0000" or "#f00" into Color32.

@@ -4,10 +4,12 @@
 mod app;
 mod canvas;
 mod config;
+mod fonts;
 mod history;
 mod i18n;
 mod panels;
 mod path_editor;
+mod preview_cache;
 pub mod svg_doc;
 
 fn main() -> eframe::Result<()> {

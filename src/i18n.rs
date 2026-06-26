@@ -131,6 +131,7 @@ static TRANSLATIONS: LazyLock<HashMap<&'static str, Trans>> = LazyLock::new(|| {
 
         // Status bar
         m.insert("status.ready", tr("Ready. Use File > Open to load an SVG.", "就绪。使用 文件 > 打开 加载 SVG。"));
+        m.insert("status.loading", tr("Loading…", "正在加载…"));
         m.insert("status.loaded", tr("Loaded", "已加载"));
         m.insert("status.selected", tr("Selected", "已选中"));
         m.insert("status.saved", tr("Saved", "已保存"));

@@ -1,15 +1,10 @@
-use egui::{Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Vec2};
+use std::sync::OnceLock;
 
+use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
+
+use crate::fonts;
+use crate::preview_cache::SvgPreviewCache;
 use crate::svg_doc::{EditablePath, PathCmd, SvgDoc};
-
-/// Create usvg::Options with system fonts loaded (for text rendering).
-fn usvg_opts_with_fonts() -> resvg::usvg::Options<'static> {
-    let mut opts = resvg::usvg::Options::default();
-    let mut fontdb = resvg::usvg::fontdb::Database::new();
-    fontdb.load_system_fonts();
-    opts.fontdb = std::sync::Arc::new(fontdb);
-    opts
-}
 
 /// Canvas state: zoom, pan, cached texture.
 #[derive(Clone, Debug)]
@@ -86,7 +81,7 @@ pub fn show_canvas(
     ui: &mut egui::Ui,
     doc: &SvgDoc,
     state: &mut CanvasState,
-    texture: &mut Option<TextureHandle>,
+    preview: &SvgPreviewCache,
 ) {
     let available = ui.available_size();
     let (response, painter) = ui.allocate_painter(available, Sense::click_and_drag());
@@ -111,20 +106,15 @@ pub fn show_canvas(
         svg_screen_size,
     );
 
-    // Generate or use cached texture
-    let tex = texture.get_or_insert_with(|| {
-        let color_image = render_svg_to_image(doc, 1024);
-        ui.ctx()
-            .load_texture("svg_preview", color_image, Default::default())
-    });
-
-    // Draw the SVG texture
-    painter.image(
-        tex.id(),
-        bg_rect,
-        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-        Color32::WHITE,
-    );
+    // Draw the cached SVG texture (refreshed by SvgPreviewCache::ensure_fresh)
+    if let Some(tex) = preview.texture() {
+        painter.image(
+            tex.id(),
+            bg_rect,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    }
 
     // Draw control points for selected path (in SVG coordinates → screen)
     let svg_to_screen = |p: Pos2| -> Pos2 {
@@ -360,7 +350,7 @@ fn handle_text_mode(
 
             if let Ok(tree) = resvg::usvg::Tree::from_data(
                 preview_svg.as_bytes(),
-                &usvg_opts_with_fonts(),
+                &fonts::usvg_opts(),
             ) {
                 let tw = tree.size().width().max(1.0) as u32;
                 let th = tree.size().height().max(1.0) as u32;
@@ -436,35 +426,16 @@ fn handle_text_mode(
 
 /// Render the SVG document to a ColorImage using resvg.
 /// The image has a checkerboard background with the SVG drawn on top.
-fn render_svg_to_image(doc: &SvgDoc, max_size: u32) -> egui::ColorImage {
+pub fn render_svg_to_image(doc: &SvgDoc, max_size: u32) -> egui::ColorImage {
     let w = (doc.width as u32).max(1).min(max_size);
     let h = (doc.height as u32).max(1).min(max_size);
 
-    // Create pixmap with transparent background
     let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).unwrap();
-
-    // Draw checkerboard pattern
-    let tile = 8u32;
-    let white = resvg::tiny_skia::ColorU8::from_rgba(255, 255, 255, 255).premultiply();
-    let gray = resvg::tiny_skia::ColorU8::from_rgba(204, 204, 204, 255).premultiply();
-    let pixels = pixmap.pixels_mut();
-    for y in 0..h {
-        for x in 0..w {
-            let color = if (x / tile + y / tile).is_multiple_of(2) {
-                white
-            } else {
-                gray
-            };
-            let idx = (y * w + x) as usize;
-            pixels[idx] = color;
-        }
-    }
+    fill_checkerboard(pixmap.pixels_mut(), w, h);
 
     // Generate SVG string from our model and render with resvg
     let svg_string = doc.to_svg_string();
-    if let Ok(tree) =
-        resvg::usvg::Tree::from_data(svg_string.as_bytes(), &usvg_opts_with_fonts())
-    {
+    if let Ok(tree) = resvg::usvg::Tree::from_data(svg_string.as_bytes(), &fonts::usvg_opts()) {
         let tree_size = tree.size();
         let scale_x = w as f32 / tree_size.width();
         let scale_y = h as f32 / tree_size.height();
@@ -493,6 +464,30 @@ fn render_svg_to_image(doc: &SvgDoc, max_size: u32) -> egui::ColorImage {
         size: [w as usize, h as usize],
         source_size: egui::Vec2::new(w as f32, h as f32),
         pixels,
+    }
+}
+
+type PremulPixel = resvg::tiny_skia::PremultipliedColorU8;
+
+fn fill_checkerboard(pixels: &mut [PremulPixel], w: u32, h: u32) {
+    static COLORS: OnceLock<(PremulPixel, PremulPixel)> = OnceLock::new();
+    let (white, gray) = *COLORS.get_or_init(|| {
+        let white = resvg::tiny_skia::ColorU8::from_rgba(255, 255, 255, 255).premultiply();
+        let gray = resvg::tiny_skia::ColorU8::from_rgba(204, 204, 204, 255).premultiply();
+        (white, gray)
+    });
+    let tile = 8u32;
+    for y in 0..h {
+        let tile_y = y / tile;
+        let row_start = (y * w) as usize;
+        for x in 0..w {
+            let tile_x = x / tile;
+            pixels[row_start + x as usize] = if (tile_x + tile_y).is_multiple_of(2) {
+                white
+            } else {
+                gray
+            };
+        }
     }
 }
 

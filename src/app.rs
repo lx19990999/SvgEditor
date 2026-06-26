@@ -1,12 +1,23 @@
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError};
+
 use egui::{self, Vec2};
 
 use crate::canvas::{self, CanvasState};
 use crate::config::{AppConfig, ThemePreference};
+use crate::fonts;
 use crate::history::History;
 use crate::i18n::{self, Lang};
 use crate::panels;
 use crate::path_editor;
+use crate::preview_cache::SvgPreviewCache;
 use crate::svg_doc::SvgDoc;
+
+enum LoadResult {
+    Ok(SvgDoc),
+    ParseError(String),
+    ReadError(String),
+}
 
 /// The main application state.
 pub struct SvgEditorApp {
@@ -17,9 +28,10 @@ pub struct SvgEditorApp {
     config: AppConfig,
     lang: Lang,
     dpi_initialized: bool,
-    texture: Option<egui::TextureHandle>,
+    preview: SvgPreviewCache,
     history: Option<History>,
     was_dragging: bool,
+    pending_load: Option<Receiver<LoadResult>>,
 }
 
 impl SvgEditorApp {
@@ -41,7 +53,7 @@ impl SvgEditorApp {
         let mut canvas_state = CanvasState::default();
 
         // Load system font list for text input
-        canvas_state.font_list = load_system_font_families();
+        canvas_state.font_list = fonts::font_family_names();
 
         Self {
             doc: None,
@@ -51,41 +63,86 @@ impl SvgEditorApp {
             config,
             lang,
             dpi_initialized: false,
-            texture: None,
+            preview: SvgPreviewCache::default(),
             history: None,
             was_dragging: false,
+            pending_load: None,
         }
     }
 
-    fn load_file(&mut self, path: &std::path::Path) {
-        match std::fs::read(path) {
-            Ok(bytes) => match SvgDoc::from_bytes(&bytes, Some(path.to_path_buf())) {
-                Ok(doc) => {
-                    self.status_msg = format!(
-                        "{}: {} ({} {})",
-                        i18n::t("status.loaded", &self.lang),
-                        path.display(),
-                        doc.paths.len(),
-                        i18n::t("paths.heading", &self.lang).to_lowercase(),
-                    );
-                    let saved_font_list = std::mem::take(&mut self.canvas_state.font_list);
-                    self.canvas_state = CanvasState::default();
-                    self.canvas_state.font_list = saved_font_list;
-                    self.history = Some(History::new(doc.clone()));
-                    self.doc = Some(doc);
-                    self.texture = None;
-                    self.error_msg = None;
-                }
-                Err(e) => {
-                    self.error_msg = Some(format!("{}: {}", i18n::t("status.parse_error", &self.lang), e));
-                    self.status_msg = i18n::t("status.failed_load", &self.lang).to_string();
-                }
-            },
-            Err(e) => {
+    fn start_load_file(&mut self, path: PathBuf) {
+        if self.pending_load.is_some() {
+            return;
+        }
+
+        self.status_msg = i18n::t("status.loading", &self.lang).to_string();
+        self.error_msg = None;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = match std::fs::read(&path) {
+                Ok(bytes) => match SvgDoc::from_bytes(&bytes, Some(path)) {
+                    Ok(doc) => LoadResult::Ok(doc),
+                    Err(e) => LoadResult::ParseError(e),
+                },
+                Err(e) => LoadResult::ReadError(e.to_string()),
+            };
+            let _ = tx.send(result);
+        });
+        self.pending_load = Some(rx);
+    }
+
+    fn poll_pending_load(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.pending_load.take() else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(result) => self.finish_load(result),
+            Err(TryRecvError::Empty) => {
+                self.pending_load = Some(rx);
+                ctx.request_repaint();
+            }
+            Err(TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn finish_load(&mut self, result: LoadResult) {
+        match result {
+            LoadResult::Ok(doc) => {
+                let path_display = doc
+                    .file_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                self.status_msg = format!(
+                    "{}: {} ({} {})",
+                    i18n::t("status.loaded", &self.lang),
+                    path_display,
+                    doc.paths.len(),
+                    i18n::t("paths.heading", &self.lang).to_lowercase(),
+                );
+                let saved_font_list = std::mem::take(&mut self.canvas_state.font_list);
+                self.canvas_state = CanvasState::default();
+                self.canvas_state.font_list = saved_font_list;
+                self.history = Some(History::new(doc.clone()));
+                self.doc = Some(doc);
+                self.preview.clear();
+                self.error_msg = None;
+            }
+            LoadResult::ParseError(e) => {
+                self.error_msg = Some(format!("{}: {}", i18n::t("status.parse_error", &self.lang), e));
+                self.status_msg = i18n::t("status.failed_load", &self.lang).to_string();
+            }
+            LoadResult::ReadError(e) => {
                 self.error_msg = Some(format!("{}: {}", i18n::t("status.read_error", &self.lang), e));
                 self.status_msg = i18n::t("status.failed_read", &self.lang).to_string();
             }
         }
+    }
+
+    fn load_file(&mut self, path: &std::path::Path) {
+        self.start_load_file(path.to_path_buf());
     }
 
     fn save_file_as(&mut self) {
@@ -173,7 +230,7 @@ impl SvgEditorApp {
         if let Some(ref mut hist) = self.history {
             if let Some(prev) = hist.undo() {
                 self.doc = Some(prev.clone());
-                self.texture = None;
+                self.preview.clear();
                 self.status_msg = i18n::t("status.undo", &self.lang).to_string();
             }
         }
@@ -184,7 +241,7 @@ impl SvgEditorApp {
         if let Some(ref mut hist) = self.history {
             if let Some(next) = hist.redo() {
                 self.doc = Some(next.clone());
-                self.texture = None;
+                self.preview.clear();
                 self.status_msg = i18n::t("status.redo", &self.lang).to_string();
             }
         }
@@ -229,7 +286,7 @@ impl SvgEditorApp {
                             }
                         }
                     }
-                    self.texture = None;
+                    self.preview.invalidate();
                 }
             }
 
@@ -255,10 +312,12 @@ impl SvgEditorApp {
 impl eframe::App for SvgEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        ctx.request_repaint();
 
         // First-frame initialization
         self.init_dpi_if_needed(&ctx);
+
+        // Complete background file loads
+        self.poll_pending_load(&ctx);
 
         // Handle keyboard shortcuts: Ctrl+Z = undo, Ctrl+Y / Ctrl+Shift+Z = redo
         let undo_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z));
@@ -307,7 +366,7 @@ impl eframe::App for SvgEditorApp {
                         path.translate_y += dy;
                     }
                 }
-                self.texture = None;
+                self.preview.invalidate();
             }
         }
 
@@ -556,14 +615,20 @@ impl eframe::App for SvgEditorApp {
                 .default_size(250.0)
                 .show(ui, |ui| {
                     if let Some(ref mut doc) = self.doc {
-                        // Save pre-change state before showing properties
-                        let pre_change = doc.clone();
-                        if panels::show_properties(ui, doc, &mut self.canvas_state, &self.lang) {
-                            // Push the pre-change state to history
-                            if let Some(ref mut hist) = self.history {
-                                hist.push(pre_change);
+                        let mut history_snapshot = None;
+                        if panels::show_properties(
+                            ui,
+                            doc,
+                            &mut self.canvas_state,
+                            &self.lang,
+                            &mut history_snapshot,
+                        ) {
+                            if let Some(snapshot) = history_snapshot {
+                                if let Some(ref mut hist) = self.history {
+                                    hist.push(snapshot);
+                                }
                             }
-                            self.texture = None;
+                            self.preview.invalidate();
                         }
                     }
                 });
@@ -607,7 +672,7 @@ impl eframe::App for SvgEditorApp {
                     });
                     self.canvas_state.selected_paths.clear();
                     self.canvas_state.selected_paths.push(doc.paths.len() - 1);
-                    self.texture = None;
+                    self.preview.invalidate();
                     self.status_msg = format!("{}: {}",
                         i18n::t("status.new_path", &self.lang),
                         i18n::t("toolbar.draw", &self.lang));
@@ -626,7 +691,7 @@ impl eframe::App for SvgEditorApp {
                         doc.paths.extend(new_paths);
                         self.canvas_state.selected_paths.clear();
                         self.canvas_state.selected_paths.push(doc.paths.len() - 1);
-                        self.texture = None;
+                        self.preview.invalidate();
                         self.status_msg = format!("{}: {} ({} {})",
                             i18n::t("status.new_path", &self.lang),
                             text,
@@ -718,7 +783,12 @@ impl eframe::App for SvgEditorApp {
             if let Some(ref doc) = self.doc {
                 let old_selected = self.canvas_state.selected_paths.clone();
 
-                canvas::show_canvas(ui, doc, &mut self.canvas_state, &mut self.texture);
+                self.preview.ensure_fresh(ui.ctx(), doc);
+                canvas::show_canvas(ui, doc, &mut self.canvas_state, &self.preview);
+
+                if self.preview.is_stale() {
+                    ui.ctx().request_repaint();
+                }
 
                 // Handle click-to-select on canvas
                 if ui.input(|i| i.pointer.any_released()) && self.canvas_state.dragging.is_none() {
@@ -791,26 +861,4 @@ impl eframe::App for SvgEditorApp {
             }
         });
     }
-}
-
-/// Load system font family names using fontdb.
-fn load_system_font_families() -> Vec<String> {
-    let mut fontdb = resvg::usvg::fontdb::Database::new();
-    let count_before = fontdb.len();
-    fontdb.load_system_fonts();
-    let count_after = fontdb.len();
-    log::info!("fontdb: before={}, after={}", count_before, count_after);
-
-    let mut families = std::collections::BTreeSet::new();
-    for face in fontdb.faces() {
-        for (name, _lang) in &face.families {
-            families.insert(name.clone());
-        }
-    }
-    let result: Vec<String> = families.into_iter().collect();
-    log::info!("Font families found: {}", result.len());
-    if result.is_empty() {
-        log::warn!("No font families found! fontdb has {} faces", count_after);
-    }
-    result
 }
